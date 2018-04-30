@@ -33,6 +33,8 @@ RUN apt-get update --fix-missing && apt-get install -y \
     build-essential && \
     rm -rf /var/lib/apt/lists/*
 
+RUN pip install pynvrtc, cupy
+
 # Install Java.
 RUN echo "deb http://http.debian.net/debian jessie-backports main" >>/etc/apt/sources.list
 RUN apt-get update
@@ -63,8 +65,9 @@ COPY tests/ tests/
 COPY pytest.ini pytest.ini
 COPY .pylintrc .pylintrc
 COPY tutorials/ tutorials/
-COPY training_config training_config/
 COPY setup.py setup.py
+COPY run_code.sh run_code.sh
+COPY training_config training_config/
 
 # Add model caching
 ARG CACHE_MODELS=false
