@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 # non_cuda_compatability: comment the line below when not using cuda
 from allennlp.modules.multilayer_sopa.sopa_gpu import *
@@ -405,6 +406,7 @@ class SOPA(nn.Module):
             l.set_bias(args)
 
     def forward(self, input, init=None, return_hidden=True):
+        input, lengths = pad_packed_sequence(input, batch_first=True)
         assert input.dim() == 3 # (len, batch, n_in)
         dir_ = 2 if self.bidirectional else 1
         batch = input.size(1)
@@ -433,6 +435,7 @@ class SOPA(nn.Module):
             lstc2.append(c2)
             lstd.append(d)
 
+        prevx = pack_padded_sequence(prevx, lengths,batch_first=True)
         if return_hidden:
             return prevx, (torch.stack(lstc1), torch.stack(lstc2), torch.stack(lstd))
         else:
