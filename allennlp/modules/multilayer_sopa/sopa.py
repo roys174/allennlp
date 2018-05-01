@@ -6,9 +6,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-
 # non_cuda_compatability: comment the line below when not using cuda
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from allennlp.modules.multilayer_sopa.sopa_gpu import *
 
 def SOPA_Compute_CPU(d, k, bidirectional=False):
@@ -117,7 +116,7 @@ class SOPACell(nn.Module):
         out_size = n_out*2 if bidirectional else n_out
 
         # i'm sticking with this for now, and may come back later
-        k = 7
+        k = 8 if n_in != out_size and self.use_highway  else 7
         self.k = k
         self.size_per_dir = n_out*k
 
@@ -130,7 +129,7 @@ class SOPACell(nn.Module):
         self.weight_out2 = nn.Parameter(torch.Tensor(
             n_out, n_out))
         self.bias_in = nn.Parameter(torch.Tensor(
-            n_out*2*k if bidirectional else n_out*k
+            n_out*14 if bidirectional else n_out*7
         ))
         self.bias_out = nn.Parameter(torch.Tensor(
             n_out))
@@ -139,8 +138,9 @@ class SOPACell(nn.Module):
 
     def init_weight(self, rescale=True):
         # initialize weights such that E[w_ij]=0 and Var[w_ij]=1/d
-        val_range = (3.0 / self.n_in) ** 0.5
+        val_range = (6.0 / (self.n_in + self.n_out)) ** 0.5
         self.weight_in.data.uniform_(-val_range, val_range)
+        val_range = (2.0 / self.n_out) ** 0.5
         self.weight_out1.data.uniform_(-val_range, val_range)
         self.weight_out2.data.uniform_(-val_range, val_range)
 
@@ -149,11 +149,11 @@ class SOPACell(nn.Module):
         self.bias_out.data.zero_()
         highway_bias, selfloop_bias, n_out = self.highway_bias, self.selfloop_bias, self.n_out
         if self.bidirectional:
-            self.bias_in.data[(self.k-1)*2*n_out:self.k*2*n_out].zero_().add_(highway_bias)
-            self.bias_in.data[(self.k-2)*2*n_out:(self.k-1)*2*n_out].zero_().add_(selfloop_bias)
+            self.bias_in.data[6*2*n_out:7*2*n_out].zero_().add_(highway_bias)
+            self.bias_in.data[5*2*n_out:6*2*n_out].zero_().add_(selfloop_bias)
         else:
-            self.bias_in.data[(self.k-1)*n_out:self.k*n_out].zero_().add_(highway_bias)
-            self.bias_in.data[(self.k-2)*n_out:(self.k-1)*n_out].zero_().add_(selfloop_bias)
+            self.bias_in.data[6*n_out:7*n_out].zero_().add_(highway_bias)
+            self.bias_in.data[5*n_out:6*n_out].zero_().add_(selfloop_bias)
 
         self.scale_x = 1
         if not rescale:
@@ -175,6 +175,9 @@ class SOPACell(nn.Module):
         if self.layer_norm:
             for i in range(3, self.k):
                 w_in[:, :, :, i].mul_(0.1)
+
+        if self.k == 8:
+            w_in[:, :, :, 7].mul_(self.scale_x)
         # re-parameterize when weight normalization is enabled
         if self.weight_norm:
             self.init_weight_norm()
@@ -232,7 +235,7 @@ class SOPACell(nn.Module):
             c1_init, c2_init, d_init = init
 
         if self.training and (self.rnn_dropout>0):
-            mask = self.get_dropout_mask_((batch, n_in), self.rnn_dropout)
+            mask = self.get_dropout_mask_((1, batch, n_in), self.rnn_dropout)
             x = input * mask.expand_as(input)
         else:
             x = input
@@ -244,8 +247,8 @@ class SOPACell(nn.Module):
         u_ = u_.view(length, batch, bidir, n_out, self.k)
 
         input_bias1, input_bias2, input_bias3, forget_bias1, forget_bias2, \
-            selfloop_bias, reset_bias = self.bias_in.view(self.k, bidir, n_out)
-        u = Variable(u_.data.new(length, batch, bidir, n_out, self.k-1))
+            selfloop_bias, reset_bias = self.bias_in.view(7, bidir, n_out)
+        u = Variable(u_.data.new(length, batch, bidir, n_out, 6))
 
         u[..., 0] = self.calc_activation(u_[..., 0] + input_bias1)
         u[..., 1] = self.calc_activation(u_[..., 1] + input_bias2)
@@ -256,9 +259,9 @@ class SOPACell(nn.Module):
 
         # non_cuda_compatability: On a cuda machine
         if input.is_cuda:
-            SOPA_Compute = SOPA_Compute_GPU(n_out, self.k, self.bidirectional)
+            SOPA_Compute = SOPA_Compute_GPU(n_out, 7, self.bidirectional)
         else:
-            SOPA_Compute = SOPA_Compute_CPU(n_out, self.k, self.bidirectional)
+            SOPA_Compute = SOPA_Compute_CPU(n_out, 7, self.bidirectional)
 
         # non_cuda_compatability: On a non-cuda machine
         # SOPA_Compute = SOPA_Compute_CPU(n_out, self.k, self.bidirectional)
@@ -280,8 +283,11 @@ class SOPACell(nn.Module):
         # mask_h = 1. if mask_h is None else mask_h.expand_as(gcs)
         if self.use_highway:
             reset = (u_[..., 6] + reset_bias).sigmoid()
-            x_prime = input.view(length, batch, bidir, n_out)
-            x_prime = x_prime * self.scale_x if self.scale_x != 1 else x_prime
+            if self.k == 7:
+                x_prime = input.view(length, batch, bidir, n_out)
+                x_prime = x_prime * self.scale_x if self.scale_x != 1 else x_prime
+            else:
+                x_prime = u_[..., 7]
             # h = (gcs*mask_h-x_prime)*reset+x_prime
             h = (gcs - x_prime) * reset + x_prime
         else:
@@ -435,7 +441,7 @@ class SOPA(nn.Module):
             lstc2.append(c2)
             lstd.append(d)
 
-        prevx = pack_padded_sequence(prevx, lengths,batch_first=True)
+        prevx = pack_padded_sequence(prevx, lengths, batch_first=True)
         if return_hidden:
             return prevx, (torch.stack(lstc1), torch.stack(lstc2), torch.stack(lstd))
         else:

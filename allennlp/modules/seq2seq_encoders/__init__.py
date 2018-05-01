@@ -26,7 +26,7 @@ from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
 from allennlp.modules.augmented_lstm import AugmentedLstm
 from allennlp.modules.multilayer_sopa.sopa import SOPA
-from allennlp.modules.sru import SRU
+from allennlp.modules.multilayer_sopa.sru import SRU
 from allennlp.modules.seq2seq_encoders.intra_sentence_attention import IntraSentenceAttentionEncoder
 from allennlp.modules.seq2seq_encoders.pytorch_seq2seq_wrapper import PytorchSeq2SeqWrapper
 from allennlp.modules.seq2seq_encoders.seq2seq_encoder import Seq2SeqEncoder
