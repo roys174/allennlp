@@ -11,6 +11,8 @@ from torch.autograd import Function, Variable
 from collections import namedtuple
 from pynvrtc.compiler import Program
 from cupy.cuda import function
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
+
 
 
 SRU_CODE = """
@@ -748,6 +750,7 @@ class SRU(nn.Module):
             l.set_bias(bias_val)
 
     def forward(self, input, init=None, return_hidden=True):
+        input, lengths = pad_packed_sequence(input, batch_first=True)
         assert input.dim() == 3 # (len, batch, n_in)
         dir_ = 2 if self.bidirectional else 1
         if init is None:
@@ -766,6 +769,8 @@ class SRU(nn.Module):
             prevx = self.ln_lst[i](h) if self.use_layer_norm else h
             lstc.append(c)
 
+        prevx = pack_padded_sequence(prevx, lengths, batch_first=True)
+        
         if return_hidden:
             return prevx, torch.stack(lstc)
         else:
