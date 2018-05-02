@@ -33,7 +33,9 @@ RUN apt-get update --fix-missing && apt-get install -y \
     build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install pynvrtc, cupy
+RUN pip install --upgrade pip
+
+RUN pip install pynvrtc cupy
 
 # Install Java.
 RUN echo "deb http://http.debian.net/debian jessie-backports main" >>/etc/apt/sources.list
@@ -54,6 +56,7 @@ RUN INSTALL_TEST_REQUIREMENTS="true" ./scripts/install_requirements.sh
 COPY demo/ demo/
 RUN cd demo && npm install && npm run build && cd ..
 
+RUN pip install tensorboard==1.0.0a6
 COPY scripts/ scripts/
 # Compile EVALB - required for parsing evaluation.
 # EVALB produces scary looking c-level output which we don't
@@ -81,4 +84,5 @@ ENV SOURCE_COMMIT $SOURCE_COMMIT
 LABEL maintainer="allennlp-contact@allenai.org"
 
 EXPOSE 8000
-CMD ["/bin/bash"]
+CMD python -m allennlp.run train -s /output/ ${CONFIG_FILE}
+
