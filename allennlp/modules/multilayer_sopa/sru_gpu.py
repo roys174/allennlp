@@ -5,9 +5,9 @@ from collections import namedtuple
 from pynvrtc.compiler import Program
 from cupy.cuda import function
 import numpy as np
-from allennlp.modules.multilayer_sopa.cuda.utils  import *
-from allennlp.modules.multilayer_sopa.cuda.sru import *
-from allennlp.modules.multilayer_sopa.cuda.sru_bidir  import *
+from multilayer_sopa.cuda.utils  import *
+from multilayer_sopa.cuda.sru import *
+from multilayer_sopa.cuda.sru_bidir  import *
 
 
 class SRU_Compute_GPU(Function):
@@ -16,11 +16,12 @@ class SRU_Compute_GPU(Function):
     _SRU_PTX = _SRU_PROG.compile()
     _DEVICE2FUNC = {}
 
-    def __init__(self, d_out, k, bidirectional=False):
+    def __init__(self, d_out, k, bidirectional=False, activation_type=0):
         super(SRU_Compute_GPU, self).__init__()
         self.k = k
         self.d_out = d_out
         self.bidirectional = bidirectional
+        self.activation_type = activation_type  # recurrent activation
 
     def compile_functions(self):
         device = torch.cuda.current_device()
@@ -66,7 +67,8 @@ class SRU_Compute_GPU(Function):
             np.int32(batch),
             np.int32(d),
             np.int32(self.k-1),
-            c.data_ptr()],
+            c.data_ptr(),
+            np.int32(self.activation_type)],
             block = (thread_per_block,1,1), grid = (num_block,1,1),
             stream=stream
         )
@@ -112,7 +114,8 @@ class SRU_Compute_GPU(Function):
             np.int32(d),
             np.int32(self.k-1),
             grad_u.data_ptr(),
-            grad_init.data_ptr()],
+            grad_init.data_ptr(),
+            np.int32(self.activation_type)],
             block = (thread_per_block,1,1), grid = (num_block,1,1),
             stream=stream
         )

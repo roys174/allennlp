@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 # non_cuda_compatability: comment the line below when not using cuda
-from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from allennlp.modules.multilayer_sopa.sopa_gpu import *
 
 def SOPA_Compute_CPU(d, k, bidirectional=False):
@@ -86,8 +85,7 @@ class SOPACell(nn.Module):
                  highway_bias=0,
                  selfloop_bias=0,
                  index=-1,
-                 coef1=1.0,
-                 coef2=0.0,
+                 coef=0.5,
                  use_highway=False):
         super(SOPACell, self).__init__()
         assert (n_out % 2) == 0
@@ -100,8 +98,7 @@ class SOPACell(nn.Module):
         self.layer_norm = layer_norm
         self.index = index
         self.activation_type = 0
-        self.coef1 = coef1
-        self.coef2 = coef2
+        self.coef = coef
         self.use_highway = use_highway
         self.highway_bias = highway_bias
         self.selfloop_bias = selfloop_bias
@@ -246,17 +243,20 @@ class SOPACell(nn.Module):
         # reset is not passed to compute function'
         u_ = u_.view(length, batch, bidir, n_out, self.k)
 
-        input_bias1, input_bias2, input_bias3, forget_bias1, forget_bias2, \
+        # some of the bias params here are never used. but i'm keeping them now
+        # in case we need to bring them back in the future
+        _, _, _, forget_bias1, forget_bias2, \
             selfloop_bias, reset_bias = self.bias_in.view(7, bidir, n_out)
         u = Variable(u_.data.new(length, batch, bidir, n_out, 6))
 
-        u[..., 0] = self.calc_activation(u_[..., 0] + input_bias1)
-        u[..., 1] = self.calc_activation(u_[..., 1] + input_bias2)
-        u[..., 2] = self.calc_activation(u_[..., 2] + input_bias3)
-        u[..., 3] = (u_[..., 3] + forget_bias1).sigmoid()
-        u[..., 4] = (u_[..., 4] + forget_bias2).sigmoid()
-        u[..., 5] = (u_[..., 5] + selfloop_bias).sigmoid()
+        u[..., 0] = u_[..., 0]  # input 1
+        u[..., 1] = u_[..., 1]  # input 2
+        u[..., 2] = u_[..., 2]  # input 3
 
+        u[..., 3] = (u_[..., 3] + forget_bias1).sigmoid()   # forget 1
+        u[..., 4] = (u_[..., 4] + forget_bias2).sigmoid()   # forget 2
+        u[..., 5] = (u_[..., 5] + selfloop_bias).sigmoid()  # selfloop
+        # u.register_hook(print)
         # non_cuda_compatability: On a cuda machine
         if input.is_cuda:
             SOPA_Compute = SOPA_Compute_GPU(n_out, 7, self.bidirectional)
@@ -264,7 +264,7 @@ class SOPACell(nn.Module):
             SOPA_Compute = SOPA_Compute_CPU(n_out, 7, self.bidirectional)
 
         # non_cuda_compatability: On a non-cuda machine
-        # SOPA_Compute = SOPA_Compute_CPU(n_out, self.k, self.bidirectional)
+        # SOPA_Compute = SOPA_Compute_CPU(n_out, 7, self.bidirectional)
 
         c1s, c2s, c1_final, c2_final, d_final = SOPA_Compute(u, c1_init, c2_init, d_init)
 
@@ -274,8 +274,8 @@ class SOPACell(nn.Module):
         mask_c2 = self.get_dropout_mask_((1, batch, bidir, n_out), self.dropout) \
             if self.training and self.dropout > 0. else None
         mask_c2 = 1. if mask_c2 is None else mask_c2.expand_as(c2s)
-        cs = self.bias_out + self.coef1 * (c1s * mask_c1).view(-1, n_out).mm(self.weight_out1) \
-                + self.coef2 * (c2s * mask_c2).view(-1, n_out).mm(self.weight_out2)
+        cs = self.bias_out + self.coef * (c1s * mask_c1).view(-1, n_out).mm(self.weight_out1) \
+                + (1. - self.coef) * (c2s * mask_c2).view(-1, n_out).mm(self.weight_out2)
         
         gcs = self.calc_activation(cs).view(length, batch, bidir, n_out)
         # mask_h = self.get_dropout_mask_((1, batch, bidir, n_out), self.dropout) \
@@ -325,7 +325,7 @@ Arguments:
 - layer_norm: ...
 - highway_bias: init bias value for bias term in reset gates. useful only when using highway connections
 - selfloop_bias: init bias value for bias term in selfloop gates. 
-- coef1/2: coefficients of unigram and bigram wfsas.
+- coef: coefficients of unigram and bigram wfsas. they sum to one
 
 forward function:
 =================
@@ -360,8 +360,7 @@ class SOPA(nn.Module):
                  layer_norm=False,
                  highway_bias=0,
                  selfloop_bias=0,
-                 coef1=1.0,
-                 coef2=1.0,
+                 coef=.5,
                  use_highway=False):
         super(SOPA, self).__init__()
         self.input_size = input_size
@@ -375,8 +374,7 @@ class SOPA(nn.Module):
         self.use_layer_norm = layer_norm
         self.use_wieght_norm = weight_norm
         self.out_size = hidden_size*2 if bidirectional else hidden_size
-        self.coef1 = coef1
-        self.coef2 = coef2
+        self.coef = coef
         self.use_highway = use_highway
 
         if use_tanh + use_relu + use_selu > 1:
@@ -399,8 +397,7 @@ class SOPA(nn.Module):
                 highway_bias=highway_bias,
                 selfloop_bias=selfloop_bias,
                 index=i+1,
-                coef1=coef1,
-                coef2=coef2,
+                coef=coef,
                 use_highway=use_highway
             )
             self.rnn_lst.append(l)

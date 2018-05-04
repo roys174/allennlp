@@ -7,7 +7,8 @@ extern "C" {
                             const int batch, 
                             const int d, 
                             const int k,
-                            float * __restrict__ c) {
+                            float * __restrict__ c,
+                            const int activation_type) {
         assert (k == 2);
         int ncols = batch*d;
         int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -21,6 +22,7 @@ extern "C" {
         for (int row = 0; row < len; ++row) {
             float g1 = *(up+1);
             cur = (cur-(*up))*g1 + (*up);
+            cur = calc_activation(activation_type, cur);
             *cp = cur;
             up += ncols_u;
             cp += ncols;
@@ -37,7 +39,8 @@ extern "C" {
                             const int d, 
                             const int k,
                             float * __restrict__ grad_u,
-                            float * __restrict__ grad_init) {
+                            float * __restrict__ grad_init,
+                            const int activation_type) {
         assert(k == 2);
 
         int ncols = batch*d;
@@ -62,7 +65,7 @@ extern "C" {
             const float prev_c_val = (row>0) ? (*(cp-ncols)) : (*(init+col));
 
             // grad wrt c
-            const float gc = *gcp + cur;
+            const float gc = (*gcp + cur)*calc_grad_activation(activation_type, c_val);
 
             // grad wrt u0
             *gup = gc*(1-g1);
@@ -72,7 +75,7 @@ extern "C" {
 
             // grad wrt c'
             cur = gc*g1;
-
+            
             up -= ncols_u;
             cp -= ncols;
             gup -= ncols_u;

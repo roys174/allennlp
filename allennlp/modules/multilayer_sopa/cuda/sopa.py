@@ -79,10 +79,10 @@ extern "C" {
 
         int ncols_u = ncols*k;
 
-        float gd = 0.f;
         float cur_c1 = *(grad_last_c1 + col);
         float cur_c2 = *(grad_last_c2 + col);
         float cur_d = *(grad_last_d + col);
+        float gd = cur_d;
 
         const float *up = u + (col*k) + (len-1)*ncols_u;
         const float *c1p = c1 + col + (len-1)*ncols;

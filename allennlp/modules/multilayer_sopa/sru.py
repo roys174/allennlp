@@ -7,16 +7,25 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Function, Variable
-from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from allennlp.modules.multilayer_sopa.sru_gpu import *
 
-def SRU_Compute_CPU(d, k, bidirectional=False):
+def SRU_Compute_CPU(d, k, bidirectional=False, activation_type=0):
     """CPU version of the core SRU computation.
 
     Has the same interface as SRU_Compute_GPU() but is a regular Python function
     instead of a torch.autograd.Function because we don't implement backward()
     explicitly.
     """
+    def activation(x, type=0):
+        if type == 0:
+            return x
+        elif type == 1:
+            return x.tanh()
+        elif type == 2:
+            return nn.functional.relu(x)
+        else:
+            assert False, 'Activation type must be 0, 1, or 2, not {}'.format(type)
+
     def sru_compute_cpu(u, init=None):
         bidir = 2 if bidirectional else 1
         assert u.size(-1) == k - 1
@@ -39,6 +48,8 @@ def SRU_Compute_CPU(d, k, bidirectional=False):
             c_prev = c_init[:, di, :]
             for t in time_seq:
                 c_t = (c_prev - x_tilde[t, :, di, :]) * forget[t, :, di, :] + x_tilde[t, :, di, :]
+                if not activation_type == 0:
+                    c_t = activation(c_t, activation_type)
                 c_prev = c_t
                 cs[t, :, di, :] = c_t
             c_final.append(c_t)
@@ -62,6 +73,7 @@ class SRUCell(nn.Module):
                  layer_norm=False,
                  highway_bias=0,
                  use_highway=False,
+                 use_recurrent_tanh=False,
                  index=-1):
         super(SRUCell, self).__init__()
         self.n_in = n_in
@@ -75,6 +87,7 @@ class SRUCell(nn.Module):
         self.highway_bias = highway_bias
         self.index = index
         self.activation_type = 0
+        self.use_recurrent_tanh = use_recurrent_tanh
         if use_tanh:
             self.activation_type = 1
         elif use_relu:
@@ -188,10 +201,11 @@ class SRUCell(nn.Module):
 
         u[..., 0] = u_[..., 0]
         u[..., 1] = (u_[..., 1] + forget_bias).sigmoid()
+        rec_act = 1 if self.use_recurrent_tanh else 0
         if input.is_cuda:
-            SRU_Compute = SRU_Compute_GPU(n_out, 3, self.bidirectional)
+            SRU_Compute = SRU_Compute_GPU(n_out, 3, self.bidirectional, activation_type=rec_act)
         else:
-            SRU_Compute = SRU_Compute_CPU(n_out, 3, self.bidirectional)
+            SRU_Compute = SRU_Compute_CPU(n_out, 3, self.bidirectional, activation_type=rec_act)
 
         cs, c_final = SRU_Compute(u, c0)
         gcs = self.calc_activation(cs)
@@ -229,7 +243,8 @@ class SRU(nn.Module):
                  weight_norm=False,
                  layer_norm=False,
                  use_highway=False,
-                 highway_bias=0):
+                 highway_bias=0,
+                 use_recurrent_tanh=False):
         super(SRU, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -261,6 +276,7 @@ class SRU(nn.Module):
                 layer_norm = layer_norm,
                 use_highway=use_highway,
                 highway_bias = highway_bias,
+                use_recurrent_tanh=use_recurrent_tanh,
                 index = i+1
             )
             self.rnn_lst.append(l)
