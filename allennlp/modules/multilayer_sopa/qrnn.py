@@ -8,75 +8,25 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function, Variable
 from allennlp.modules.multilayer_sopa.sru_gpu import *
+from allennlp.modules.multilayer_sopa.sru import *
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-def SRU_Compute_CPU(d, k, bidirectional=False, activation_type=0):
-    """CPU version of the core SRU computation.
-
-    Has the same interface as SRU_Compute_GPU() but is a regular Python function
-    instead of a torch.autograd.Function because we don't implement backward()
-    explicitly.
-    """
-    def activation(x, type=0):
-        if type == 0:
-            return x
-        elif type == 1:
-            return x.tanh()
-        elif type == 2:
-            return nn.functional.relu(x)
-        else:
-            assert False, 'Activation type must be 0, 1, or 2, not {}'.format(type)
-
-    def sru_compute_cpu(u, init=None):
-        bidir = 2 if bidirectional else 1
-        assert u.size(-1) == k - 1
-        length, batch = u.size(0), u.size(1)
-
-        x_tilde, forget = u[..., 0], u[..., 1]
-        cs = Variable(u.data.new(length, batch, bidir, d))
-        if init is None:
-            c_init = Variable(u.data.new(batch, bidir, d).zero_())
-        else:
-            c_init = init.view(batch, bidir, d)
-
-        c_final = []
-        for di in range(bidir):
-            if di == 0:
-                time_seq = range(length)
-            else:
-                time_seq = range(length - 1, -1, -1)
-
-            c_prev = c_init[:, di, :]
-            for t in time_seq:
-                c_t = (c_prev - x_tilde[t, :, di, :]) * forget[t, :, di, :] + x_tilde[t, :, di, :]
-                if not activation_type == 0:
-                    c_t = activation(c_t, activation_type)
-                c_prev = c_t
-                cs[t, :, di, :] = c_t
-            c_final.append(c_t)
-
-        return cs, torch.stack(c_final, dim=1).view(batch, -1)
-
-    return sru_compute_cpu
-
-
-class SRUCell(nn.Module):
+class QRNNCell(nn.Module):
     def __init__(self,
                  n_in,
                  n_out,
+                 window_size=1,
                  dropout=0,
                  rnn_dropout=0,
                  bidirectional=False,
                  use_tanh=1,
                  use_relu=0,
                  use_selu=0,
+                 use_output_gate=False,
                  weight_norm=False,
                  layer_norm=False,
-                 highway_bias=0,
-                 use_highway=False,
-                 use_recurrent_tanh=False,
                  index=-1):
-        super(SRUCell, self).__init__()
+        super(QRNNCell, self).__init__()
         self.n_in = n_in
         self.n_out = n_out
         self.rnn_dropout = rnn_dropout
@@ -84,28 +34,28 @@ class SRUCell(nn.Module):
         self.bidirectional = bidirectional
         self.weight_norm = weight_norm
         self.layer_norm = layer_norm
-        self.use_highway = use_highway
-        self.highway_bias = highway_bias
         self.index = index
         self.activation_type = 0
-        self.use_recurrent_tanh = use_recurrent_tanh
         if use_tanh:
             self.activation_type = 1
         elif use_relu:
             self.activation_type = 2
         elif use_selu:
             self.activation_type = 3
+        self.window_size = window_size
+        self.use_output_gate = use_output_gate
 
         out_size = n_out*2 if bidirectional else n_out
-        k = 4 if n_in != out_size and self.use_highway else 3
+        k = 3 if use_output_gate else 2
+
         self.k = k
         self.size_per_dir = n_out*k
         self.weight = nn.Parameter(torch.Tensor(
-            n_in,
+            self.window_size * n_in,
             self.size_per_dir*2 if bidirectional else self.size_per_dir
         ))
         self.bias = nn.Parameter(torch.Tensor(
-            n_out*4 if bidirectional else n_out*2
+            self.size_per_dir*2 if bidirectional else self.size_per_dir
         ))
         self.init_weight()
 
@@ -116,19 +66,9 @@ class SRUCell(nn.Module):
 
         # initialize bias
         self.bias.data.zero_()
-        bias_val, n_out = self.highway_bias, self.n_out
-        if self.bidirectional:
-            self.bias.data[n_out*2:].zero_().add_(bias_val)
-        else:
-            self.bias.data[n_out:].zero_().add_(bias_val)
-
-        self.scale_x = 1
-        if not rescale:
-            return
-        self.scale_x = (1+math.exp(bias_val)*2)**0.5
 
         # re-scale weights in case there's dropout and / or layer normalization
-        w = self.weight.data.view(self.n_in, -1, self.n_out, self.k)
+        w = self.weight.data.view(self.window_size*self.n_in, -1, self.n_out, self.k)
         if self.dropout>0:
             w[:,:,:,0].mul_((1-self.dropout)**0.5)
         if self.rnn_dropout>0:
@@ -136,8 +76,6 @@ class SRUCell(nn.Module):
         if self.layer_norm:
             w[:,:,:,1].mul_(0.1)
             w[:,:,:,2].mul_(0.1)
-        if self.k == 4:
-            w[:,:,:,3].mul_(self.scale_x)
 
         # re-parameterize when weight normalization is enabled
         if self.weight_norm:
@@ -156,7 +94,7 @@ class SRUCell(nn.Module):
 
     def set_bias(self, args):
         sys.stderr.write("\nWARNING: set_bias() is deprecated. use `highway_bias` option"
-            " in SRUCell() constructor.\n"
+            " in QRNNCell() constructor.\n"
         )
         self.highway_bias = args.highway_bias
         self.init_weight()
@@ -191,39 +129,48 @@ class SRUCell(nn.Module):
             x = input * mask.expand_as(input)
         else:
             x = input
+        if self.window_size == 1:
+            x_2d = x if x.dim() == 2 else x.contiguous().view(-1, n_in)
+            weight = self.weight if not self.weight_norm else self.apply_weight_norm()
+            u_ = x_2d.mm(weight)
+            u_ = u_.view(length, batch, bidir, n_out, self.k)
+        elif self.window_size == 2:
+            Xm1 = []
+            Xm1.append(x[:1, :, :] * 0)
+            if len(x) > 1:
+                Xm1.append(x[:-1, :, :])
+            Xm1 = torch.cat(Xm1, 0)
+            # Convert two (seq_len, batch_size, hidden) tensors to (seq_len, batch_size, 2 * hidden)
+            source = torch.cat([x, Xm1], 2)
+            x_2d = source if source.dim() == 2 else source.contiguous().view(-1, n_in * 2)
+            weight = self.weight if not self.weight_norm else self.apply_weight_norm()
+            u_ = x_2d.mm(weight)
+            u_ = u_.view(length, batch, bidir, n_out, self.k)
+        else:
+            assert False    # yes they only use up to 2.
 
-        x_2d = x if x.dim() == 2 else x.contiguous().view(-1, n_in)
-        weight = self.weight if not self.weight_norm else self.apply_weight_norm()
-        u_ = x_2d.mm(weight)
-        u_ = u_.view(length, batch, bidir, n_out, self.k)
 
-        forget_bias, reset_bias = self.bias.view(2, bidir, self.n_out)
+        if self.use_output_gate:
+            input_bias, forget_bias, output_bias = self.bias.view(self.k, bidir, self.n_out)
+        else :
+            input_bias, forget_bias = self.bias.view(self.k, bidir, self.n_out)
         u = Variable(u_.data.new(length, batch, bidir, n_out, 2))
 
-        u[..., 0] = u_[..., 0]
+        u[..., 0] = (u_[..., 0] + input_bias).tanh()
         u[..., 1] = (u_[..., 1] + forget_bias).sigmoid()
-        rec_act = 1 if self.use_recurrent_tanh else 0
         if input.is_cuda:
-            SRU_Compute = SRU_Compute_GPU(n_out, 3, self.bidirectional, activation_type=rec_act)
+            QRNN_Compute = SRU_Compute_GPU(n_out, 3, self.bidirectional)
         else:
-            SRU_Compute = SRU_Compute_CPU(n_out, 3, self.bidirectional, activation_type=rec_act)
+            QRNN_Compute = SRU_Compute_CPU(n_out, 3, self.bidirectional)
 
-        cs, c_final = SRU_Compute(u, c0)
+        cs, c_final = QRNN_Compute(u, c0)
         gcs = self.calc_activation(cs)
-        mask_h = self.get_dropout_mask_((1, batch, bidir, n_out), self.dropout) \
-                if self.training and self.dropout > 0. else None
-        mask_h = 1. if mask_h is None else mask_h.expand_as(gcs)
 
-        if self.use_highway:
-            reset = (u_[..., 2] + reset_bias).sigmoid()
-            if self.k == 3:
-                x_prime = input.view(length, batch, bidir, n_out)
-                x_prime = x_prime * self.scale_x if self.scale_x != 1 else x_prime
-            else:
-                x_prime = u_[..., 3]
-            h = (gcs*mask_h-x_prime)*reset+x_prime
+        if self.use_output_gate:
+            output = (u_[..., 2] + output_bias).sigmoid()
+            h = output * gcs
         else:
-            h = gcs * mask_h
+            h = gcs
         return h.view(length, batch, -1), c_final
 
     def get_dropout_mask_(self, size, p):
@@ -232,21 +179,20 @@ class SRUCell(nn.Module):
 
 
 
-class SRU(nn.Module):
+class QRNN(nn.Module):
     def __init__(self, input_size, hidden_size,
                  num_layers=2,
+                 window_size=1,
                  dropout=0,
                  rnn_dropout=0,
                  bidirectional=False,
                  use_tanh=1,
                  use_relu=0,
                  use_selu=0,
+                 use_output_gate=False,
                  weight_norm=False,
-                 layer_norm=False,
-                 use_highway=False,
-                 highway_bias=0,
-                 use_recurrent_tanh=False):
-        super(SRU, self).__init__()
+                 layer_norm=False):
+        super(QRNN, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -259,25 +205,24 @@ class SRU(nn.Module):
         self.use_wieght_norm = weight_norm
         self.out_size = hidden_size*2 if bidirectional else hidden_size
         if use_tanh + use_relu + use_selu > 1:
-            sys.stderr.write("\nWARNING: More than one activation enabled in SRU"
+            sys.stderr.write("\nWARNING: More than one activation enabled in QRNN"
                 " (tanh: {}  relu: {}  selu: {})\n".format(use_tanh, use_relu, use_selu)
             )
 
         for i in range(num_layers):
-            l = SRUCell(
+            l = QRNNCell(
                 n_in = self.input_size if i == 0 else self.out_size,
                 n_out = self.hidden_size,
+                window_size=window_size,
                 dropout = dropout if i+1 != num_layers else 0,
                 rnn_dropout = rnn_dropout,
                 bidirectional = bidirectional,
                 use_tanh = use_tanh,
                 use_relu = use_relu,
                 use_selu = use_selu,
+                use_output_gate=use_output_gate,
                 weight_norm = weight_norm,
                 layer_norm = layer_norm,
-                use_highway=use_highway,
-                highway_bias = highway_bias,
-                use_recurrent_tanh=use_recurrent_tanh,
                 index = i+1
             )
             self.rnn_lst.append(l)

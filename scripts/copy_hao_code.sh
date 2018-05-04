@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 cp ~/code/soft_patterns_generation/multilayer_sopa/cuda/* ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/cuda/
-cp ~/code/soft_patterns_generation/multilayer_sopa/{qrnn,sru*,sopa*}.py ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/cuda/
+cp ~/code/soft_patterns_generation/multilayer_sopa/{qrnn,sru*,sopa*}.py ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/
 
 for f in ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/{sopa,sru,qrnn}.*py; do
     cat $f | sed 's/from multilayer_sopa/from allennlp.modules.multilayer_sopa/' > a
@@ -14,6 +14,12 @@ for f in ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/{sopa,sru
     let n++
     sed -i '' ${n}'i\
     \        input, lengths = pad_packed_sequence(input, batch_first=True)
+    ' a
+
+    n=$(grep -n 'from allennlp.modules.multilayer_sopa' a | tail -n 1  |tr ':' ' ' | awk '{print $1}')
+    let n++
+    sed -i '' ${n}'i\
+    from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
     ' a
     mv -f a $f
 done

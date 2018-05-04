@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 # non_cuda_compatability: comment the line below when not using cuda
 from allennlp.modules.multilayer_sopa.sopa_gpu import *
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 def SOPA_Compute_CPU(d, k, bidirectional=False):
     """CPU version of the core SOPA computation.
