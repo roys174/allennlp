@@ -6,9 +6,9 @@ from collections import namedtuple
 from pynvrtc.compiler import Program
 from cupy.cuda import function
 import numpy as np
-from multilayer_sopa.cuda.utils  import *
-from multilayer_sopa.cuda.sopa  import *
-from multilayer_sopa.cuda.sopa_bidir  import *
+from allennlp.modules.multilayer_sopa.cuda.utils  import *
+from allennlp.modules.multilayer_sopa.cuda.sopa  import *
+from allennlp.modules.multilayer_sopa.cuda.sopa_bidir  import *
 
 class SOPA_Compute_GPU(Function):
 

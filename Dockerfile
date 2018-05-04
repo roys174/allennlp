@@ -38,12 +38,12 @@ RUN pip install --upgrade pip
 RUN pip install pynvrtc cupy
 
 # Install Java.
-RUN echo "deb http://http.debian.net/debian jessie-backports main" >>/etc/apt/sources.list
-RUN apt-get update
-RUN apt-get install -y -t jessie-backports openjdk-8-jdk
+#RUN echo "deb http://http.debian.net/debian jessie-backports main" >>/etc/apt/sources.list
+#RUN apt-get update
+#RUN apt-get install -y -t jessie-backports openjdk-8-jdk
 
 # Install npm
-RUN curl -sL https://deb.nodesource.com/setup_8.x | bash - && apt-get install -y nodejs
+#RUN curl -sL https://deb.nodesource.com/setup_8.x | bash - && apt-get install -y nodejs
 
 # Copy select files needed for installing requirements.
 # We only copy what we need here so small changes to the repository does not trigger re-installation of the requirements.
@@ -53,15 +53,15 @@ COPY scripts/install_requirements.sh scripts/install_requirements.sh
 RUN INSTALL_TEST_REQUIREMENTS="true" ./scripts/install_requirements.sh
 
 # Build demo
-COPY demo/ demo/
-RUN cd demo && npm install && npm run build && cd ..
+#COPY demo/ demo/
+#RUN cd demo && npm install && npm run build && cd ..
 
 RUN pip install tensorboard==1.0.0a6
 COPY scripts/ scripts/
 # Compile EVALB - required for parsing evaluation.
 # EVALB produces scary looking c-level output which we don't
 # care about, so we redirect the output to /dev/null.
-RUN cd scripts/EVALB && make > /dev/null && cd ..
+#RUN cd scripts/EVALB && make > /dev/null && cd ..
 
 COPY allennlp/ allennlp/
 COPY tests/ tests/
@@ -73,8 +73,8 @@ COPY run_code.sh run_code.sh
 COPY training_config training_config/
 
 # Add model caching
-ARG CACHE_MODELS=false
-RUN ./scripts/cache_models.py
+#ARG CACHE_MODELS=false
+#RUN ./scripts/cache_models.py
 
 
 # Optional argument to set an environment variable with the Git SHA

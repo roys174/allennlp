@@ -17,3 +17,8 @@ for f in ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/{sopa,sru
     ' a
     mv -f a $f
 done
+
+for f in ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/{sopa,sru}_gpu.py; do
+    cat $f | sed 's/from multilayer_sopa/from allennlp.modules.multilayer_sopa/' > a
+    mv -f a $f
+done
