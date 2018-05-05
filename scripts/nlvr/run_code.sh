@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-f=/tmp/f.json
+f=/tmp/config.json
 
 scripts/env_to_json.py - $f
 

@@ -12,9 +12,11 @@ def main(args):
         return -1
 
     if args[1] == '-':
+        print("Reading args from env variables")
         import os
         v = os.environ
     else:
+        print("Reading args from", args[1])
         with open(args[1]) as ifh:
             v = dict([(l.split()[1].split("=")) for l in ifh])
 
@@ -99,6 +101,7 @@ def main(args):
 
     base["model"]["encoder"] = build_encoder(v)
 
+    print("Writing", args[2])
     with open(args[2], 'w') as ofh:
         json.dump(base, ofh, indent = 2)
 
