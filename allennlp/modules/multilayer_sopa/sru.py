@@ -74,7 +74,7 @@ class SRUCell(nn.Module):
                  layer_norm=False,
                  highway_bias=0,
                  use_highway=False,
-                 use_recurrent_tanh=False,
+                 recurrent_tanh=False,
                  index=-1):
         super(SRUCell, self).__init__()
         self.n_in = n_in
@@ -88,7 +88,7 @@ class SRUCell(nn.Module):
         self.highway_bias = highway_bias
         self.index = index
         self.activation_type = 0
-        self.use_recurrent_tanh = use_recurrent_tanh
+        self.recurrent_tanh = recurrent_tanh
         if use_tanh:
             self.activation_type = 1
         elif use_relu:
@@ -202,7 +202,7 @@ class SRUCell(nn.Module):
 
         u[..., 0] = u_[..., 0]
         u[..., 1] = (u_[..., 1] + forget_bias).sigmoid()
-        rec_act = 1 if self.use_recurrent_tanh else 0
+        rec_act = 1 if self.recurrent_tanh else 0
         if input.is_cuda:
             SRU_Compute = SRU_Compute_GPU(n_out, 3, self.bidirectional, activation_type=rec_act)
         else:
@@ -245,7 +245,7 @@ class SRU(nn.Module):
                  layer_norm=False,
                  use_highway=False,
                  highway_bias=0,
-                 use_recurrent_tanh=False):
+                 recurrent_tanh=False):
         super(SRU, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -277,7 +277,7 @@ class SRU(nn.Module):
                 layer_norm = layer_norm,
                 use_highway=use_highway,
                 highway_bias = highway_bias,
-                use_recurrent_tanh=use_recurrent_tanh,
+                recurrent_tanh=recurrent_tanh,
                 index = i+1
             )
             self.rnn_lst.append(l)
