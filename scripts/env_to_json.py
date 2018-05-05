@@ -33,9 +33,9 @@ def main(args):
                 }
             }
         },
-        "train_data_path": "/input/train",
-        "validation_data_path": "/input/testa",
-        "test_data_path": "/input/testb",
+        "train_data_path": "/input/eng.train",
+        "validation_data_path": "/input/eng.testa",
+        "test_data_path": "/input/eng.testb",
         "evaluate_on_test": True,
         "model": {
         "type": "crf_tagger",
@@ -85,7 +85,7 @@ def main(args):
         "validation_metric": "+f1-measure-overall",
         "num_serialized_models_to_keep": 3,
         "num_epochs": int(v["N_EPOCHS"]),
-        "grad_norm": float(v["CLIP_GRAD"]),
+        "grad_clipping": float(v["CLIP_GRAD"]),
         "patience": int(v["PATIENCE"]),
         "cuda_device": 0,
         "learning_rate_scheduler": {
@@ -97,7 +97,7 @@ def main(args):
       }
     }
 
-    base["encoder"] = build_encoder(v)
+    base["model"]["encoder"] = build_encoder(v)
 
     with open(args[2], 'w') as ofh:
         json.dump(base, ofh, indent = 2)
