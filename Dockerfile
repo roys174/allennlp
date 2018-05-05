@@ -1,4 +1,4 @@
-FROM python:3.6.3-jessie
+FROM nvidia/cuda:8.0-cudnn6-devel
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
@@ -33,9 +33,18 @@ RUN apt-get update --fix-missing && apt-get install -y \
     build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --upgrade pip
+ENV PATH /usr/local/nvidia/bin/:/opt/conda/bin:$PATH
 
-RUN pip install pynvrtc cupy
+RUN echo 'export PATH=/opt/conda/bin:$PATH' > /etc/profile.d/conda.sh && \
+    wget --quiet https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
+    /bin/bash ~/miniconda.sh -b -p /opt/conda && \
+    rm ~/miniconda.sh
+
+# Use python 3.6
+RUN conda install python=3.6 
+
+RUN pip install --no-cache-dir cupy-cuda80==5.0.0a1
+RUN pip install pynvrtc
 
 # Install Java.
 #RUN echo "deb http://http.debian.net/debian jessie-backports main" >>/etc/apt/sources.list
@@ -69,7 +78,6 @@ COPY pytest.ini pytest.ini
 COPY .pylintrc .pylintrc
 COPY tutorials/ tutorials/
 COPY setup.py setup.py
-COPY run_code.sh run_code.sh
 COPY training_config training_config/
 
 # Add model caching
@@ -84,5 +92,5 @@ ENV SOURCE_COMMIT $SOURCE_COMMIT
 LABEL maintainer="allennlp-contact@allenai.org"
 
 EXPOSE 8000
-CMD python -m allennlp.run train -s /output/ ${CONFIG_FILE}
+CMD scripts/run_code.sh
 
