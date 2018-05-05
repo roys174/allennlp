@@ -120,11 +120,12 @@ def build_encoder(v):
         d["use_relu"] = 0
         d["use_selu"] = 0
         d["rnn_dropout"] = float(v["RNN_DROPOUT"])
-        d["use_highway"] = bool(v["USE_HIGHWAY"])
 
     if v["MODEL"] == 'sru':
+        d["use_highway"] = bool(v["USE_HIGHWAY"])
         d["use_recurrent_tanh"] = bool(v["USE_RECURRENT_TANH"])
     elif v["MODEL"] == "sopa":
+        d["use_highway"] = bool(v["USE_HIGHWAY"])
         d["coef"] = float(v["COEF"])
 
 
