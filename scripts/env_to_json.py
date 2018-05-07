@@ -73,14 +73,17 @@ def build_encoder(v, old_encoder):
         d["rnn_dropout"] = float(v["RNN_DROPOUT"])
 
     if v["MODEL"] == 'sru':
-        d["use_highway"] = bool(v["USE_HIGHWAY"])
-        d["recurrent_tanh"] = bool(v["RECURRENT_TANH"])
+        d["use_highway"] = bool_str(v["USE_HIGHWAY"])
+        d["recurrent_tanh"] = bool_str(v["RECURRENT_TANH"])
     elif v["MODEL"] == "sopa":
-        d["use_highway"] = bool(v["USE_HIGHWAY"])
+        d["use_highway"] = bool_str(v["USE_HIGHWAY"])
         d["coef"] = float(v["COEF"])
 
 
     return d
+
+def bool_str(v):
+    return v.lower() == 'true'
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))
