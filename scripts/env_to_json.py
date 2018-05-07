@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python
 
 import sys
 import json
@@ -7,8 +7,8 @@ import json
 def main(args):
     argc = len(args)
 
-    if argc < 3:
-        print("Usage:", args[0], "<env file> <json ofile>")
+    if argc < 5:
+        print("Usage:", args[0], "<env file or '-' to read from ENV> <json base file> <field names (comma separated)> <json output file>")
         return -1
 
     if args[1] == '-':
@@ -20,100 +20,51 @@ def main(args):
         with open(args[1]) as ifh:
             v = dict([(l.split()[1].split("=")) for l in ifh])
 
-    base = {
-        "dataset_reader": {
-            "type": "conll2003",
-            "tag_label": "ner",
-            "coding_scheme": "BIOUL",
-            "token_indexers": {
-                "tokens": {
-                    "type": "single_id",
-                    "lowercase_tokens": True
-                },
-                "token_characters": {
-                    "type": "characters"
-                }
-            }
-        },
-        "train_data_path": "/input/eng.train",
-        "validation_data_path": "/input/eng.testa",
-        "test_data_path": "/input/eng.testb",
-        "evaluate_on_test": True,
-        "model": {
-        "type": "crf_tagger",
-        "constraint_type": "BIOUL",
-        "dropout": 0.5,
-        "include_start_end_transitions": False,
-        "text_field_embedder": {
-            "tokens": {
-                "type": "embedding",
-                "embedding_dim": 50,
-                "pretrained_file": "https://s3-us-west-2.amazonaws.com/allennlp/datasets/glove/glove.6B.50d.txt.gz",
-                "trainable": True
-            },
-            "token_characters": {
-                "type": "character_encoding",
-                "embedding": {
-                    "embedding_dim": 16
-                },
-                "encoder": {
-                    "type": "cnn",
-                    "embedding_dim": 16,
-                    "num_filters": 128,
-                    "ngram_filter_sizes": [3],
-                    "conv_layer_activation": "relu"
-                }
-            }
-        },
-        "regularizer": [
-          [
-            "scalar_parameters",
-            {
-              "type": "l2",
-              "alpha": float(v["WEIGHT_DECAY"])
-            }
-          ]
-        ]
-      },
-      "iterator": {
-        "type": "basic",
-        "batch_size": int(v["BATCH_SIZE"])
-      },
-      "trainer": {
-        "optimizer": {
-            "type": "adam",
-            "lr": float(v["LEARNING_RATE"])
-        },
-        "validation_metric": "+f1-measure-overall",
-        "num_serialized_models_to_keep": 3,
-        "num_epochs": int(v["N_EPOCHS"]),
-        "grad_clipping": float(v["CLIP_GRAD"]),
-        "patience": int(v["PATIENCE"]),
-        "cuda_device": 0,
-        "learning_rate_scheduler": {
-              "type": "reduce_on_plateau",
-              "factor": 0.5,
-              "mode": "max",
-              "patience": int(v["LR_PATIENCE"])
-        },
-      }
-    }
+    with open(args[2]) as ifh:
+        base = json.load(ifh)
 
-    base["model"]["encoder"] = build_encoder(v)
+    for encoder in args[3].split(","):
+        base["model"][encoder] = build_encoder(v, base["model"][encoder])
 
-    print("Writing", args[2])
-    with open(args[2], 'w') as ofh:
+    if "trainer" in base:
+        if "optimizer" in base["trainer"]:
+            base["trainer"]["optimizer"]["lr"] = float(v["LEARNING_RATE"])
+        else:
+            print("No optimizer found in trainer")
+        base["trainer"]["grad_clipping"] = float(v["CLIP_GRAD"])
+        base["trainer"]["patience"] = int(v["PATIENCE"])
+
+        if "learning_rate_scheduler" in base["trainer"]:
+            base["trainer"]["learning_rate_scheduler"]["patience"] = int(v["LR_PATIENCE"])
+        else:
+            base["trainer"]["learning_rate_scheduler"] = {
+                "type": "reduce_on_plateau",
+                "factor": 0.5,
+                "mode": "max",
+                "patience": int(v["LR_PATIENCE"])
+            }
+    else:
+        print("Trainer not in base model")
+
+
+    if "regularizer" in base and base["regularizer"][0] == "scalar_parameters" \
+        and base["regularizer"][0]["type"] == "l2":
+        base["regularizer"][0]["alpha": float(v["WEIGHT_DECAY"])]
+
+    print("Writing", args[4])
+    with open(args[4], 'w') as ofh:
         json.dump(base, ofh, indent = 2)
 
     return 0
 
-def build_encoder(v):
+def build_encoder(v, old_encoder):
+    hidden_size = int(v["HIDDEN_SIZE"]) if "HIDDEN_SIZE" in v else old_encoder["hidden_size"]
     d = {"type": v["MODEL"],
-             "hidden_size": int(v["HIDDEN_SIZE"]),
+             "hidden_size": hidden_size,
             "num_layers": 2,
             "dropout": 0.5,
             "bidirectional": True,
-            "input_size": 178,
+            "input_size": old_encoder["input_size"]
          }
     if v["MODEL"] != "lstm":
         d["use_tanh"] = 1
