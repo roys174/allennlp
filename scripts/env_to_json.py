@@ -32,11 +32,11 @@ def main(args):
         else:
             print("No optimizer found in trainer")
         base["trainer"]["grad_clipping"] = float(v["CLIP_GRAD"])
-        base["trainer"]["patience"] = int(v["PATIENCE"])
 
-        if "learning_rate_scheduler" in base["trainer"]:
-            base["trainer"]["learning_rate_scheduler"]["patience"] = int(v["LR_PATIENCE"])
-        else:
+        if "patience" not in base["trainer"]:
+            base["trainer"]["patience"] = int(v["PATIENCE"])
+
+        if "learning_rate_scheduler" not in base["trainer"]:
             base["trainer"]["learning_rate_scheduler"] = {
                 "type": "reduce_on_plateau",
                 "factor": 0.5,
