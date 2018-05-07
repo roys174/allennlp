@@ -47,9 +47,9 @@ def main(args):
         print("Trainer not in base model")
 
 
-    if "regularizer" in base and base["regularizer"][0] == "scalar_parameters" \
-        and base["regularizer"][1]["type"] == "l2":
-        base["regularizer"][1]["alpha": float(v["WEIGHT_DECAY"])]
+    if "regularizer" in base["model"] and base["model"]["regularizer"][0][0] == "scalar_parameters" \
+        and base["model"]["regularizer"][0][1]["type"] == "l2":
+        base["model"]["regularizer"][0][1]["alpha"] = float(v["WEIGHT_DECAY"])
 
     print("Writing", args[4])
     with open(args[4], 'w') as ofh:
