@@ -48,8 +48,8 @@ def main(args):
 
 
     if "regularizer" in base and base["regularizer"][0] == "scalar_parameters" \
-        and base["regularizer"][0]["type"] == "l2":
-        base["regularizer"][0]["alpha": float(v["WEIGHT_DECAY"])]
+        and base["regularizer"][1]["type"] == "l2":
+        base["regularizer"][1]["alpha": float(v["WEIGHT_DECAY"])]
 
     print("Writing", args[4])
     with open(args[4], 'w') as ofh:
