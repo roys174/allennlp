@@ -61,7 +61,7 @@ def build_encoder(v, old_encoder):
     hidden_size = int(v["HIDDEN_SIZE"]) if "HIDDEN_SIZE" in v else old_encoder["hidden_size"]
     d = {"type": v["MODEL"],
              "hidden_size": hidden_size,
-            "num_layers": 2,
+            "num_layers": int(v["DEPTH"]),
             "dropout": 0.5,
             "bidirectional": True,
             "input_size": old_encoder["input_size"]
