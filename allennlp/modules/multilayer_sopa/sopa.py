@@ -20,7 +20,7 @@ def SOPA_Compute_CPU(d, k, bidirectional=False):
 
     def sopa_compute_cpu(u, c1_init=None, c2_init=None, d_init=None):
         bidir = 2 if bidirectional else 1
-        assert u.size(-1) == k - 1
+        assert u.size(-1) == k
         length, batch = u.size(0), u.size(1)
         if c1_init is None:
             assert False
@@ -55,7 +55,9 @@ def SOPA_Compute_CPU(d, k, bidirectional=False):
                 c2_t = (c2_prev - tmp) * forget2[t, :, di, :] + tmp
 
                 # somehow arbitrary design choice. we could revisit this gate.
-                d_t = (d_prev - x_tilde2[t, :, di, :]) * selfloop[t, :, di, :] + x_tilde2[t, :, di, :]
+                # d_t = (d_prev - x_tilde2[t, :, di, :]) * selfloop[t, :, di, :] + x_tilde2[t, :, di, :]
+                # d_t = d_prev * selfloop[t, :, di, :] + x_tilde2[t, :, di, :]
+                d_t = x_tilde2[t, :, di, :]
                 c1_prev, c2_prev, d_prev = c1_t, c2_t, d_t
                 c1s[t,:,di,:], c2s[t,:,di,:]  = c1_t, c2_t
 
@@ -87,7 +89,9 @@ class SOPACell(nn.Module):
                  selfloop_bias=0,
                  index=-1,
                  coef=0.5,
-                 use_highway=False):
+                 use_highway=False,
+                 use_output_gate=False,
+                 window_size=1):
         super(SOPACell, self).__init__()
         assert (n_out % 2) == 0
         self.n_in = n_in
@@ -95,14 +99,18 @@ class SOPACell(nn.Module):
         self.rnn_dropout = rnn_dropout
         self.dropout = dropout
         self.bidirectional = bidirectional
+        self.bidir = 2 if self.bidirectional else 1
         self.weight_norm = weight_norm
         self.layer_norm = layer_norm
         self.index = index
         self.activation_type = 0
         self.coef = coef
         self.use_highway = use_highway
+        self.use_output_gate = use_output_gate  # borrowed from qrnn
         self.highway_bias = highway_bias
         self.selfloop_bias = selfloop_bias
+        self.window_size = window_size
+        assert window_size <= 2    # only 1 or 2 is supported
 
         if use_tanh:
             self.activation_type = 1
@@ -111,32 +119,38 @@ class SOPACell(nn.Module):
         elif use_selu:
             self.activation_type = 3
 
-        out_size = n_out*2 if bidirectional else n_out
-
         # i'm sticking with this for now, and may come back later
-        k = 8 if n_in != out_size and self.use_highway  else 7
-        self.k = k
-        self.size_per_dir = n_out*k
+        # basic: in1, in2, in3, f1, f2, s1
+        # optional: reset, output, highway affine.
+        self.k = 7 if self.use_output_gate else 6
+        # we do not use bias in highway affine
+        self.n_bias = 7 if self.use_output_gate else 6
+        if self.use_highway:
+            self.k += 1
+            self.n_bias += 1
+            if n_in != n_out:
+                self.k += 1
+        self.size_per_dir = n_out*self.k
 
         self.weight_in = nn.Parameter(torch.Tensor(
-            n_in,
-            self.size_per_dir*2 if bidirectional else self.size_per_dir
+            window_size*n_in,
+            self.size_per_dir*self.bidir
         ))
         self.weight_out1 = nn.Parameter(torch.Tensor(
-            n_out, n_out))
+            self.bidir*n_out, self.bidir*n_out))
         self.weight_out2 = nn.Parameter(torch.Tensor(
-            n_out, n_out))
+            self.bidir*n_out, self.bidir*n_out))
+
         self.bias_in = nn.Parameter(torch.Tensor(
-            n_out*14 if bidirectional else n_out*7
+            n_out*self.n_bias*self.bidir
         ))
-        self.bias_out = nn.Parameter(torch.Tensor(
-            n_out))
+        self.bias_out = nn.Parameter(torch.Tensor(self.bidir*n_out))
 
         self.init_weight()
 
     def init_weight(self, rescale=True):
         # initialize weights such that E[w_ij]=0 and Var[w_ij]=1/d
-        val_range = (6.0 / (self.n_in + self.n_out)) ** 0.5
+        val_range = (6.0 / (self.window_size*self.n_in + self.n_out)) ** 0.5
         self.weight_in.data.uniform_(-val_range, val_range)
         val_range = (2.0 / self.n_out) ** 0.5
         self.weight_out1.data.uniform_(-val_range, val_range)
@@ -147,10 +161,12 @@ class SOPACell(nn.Module):
         self.bias_out.data.zero_()
         highway_bias, selfloop_bias, n_out = self.highway_bias, self.selfloop_bias, self.n_out
         if self.bidirectional:
-            self.bias_in.data[6*2*n_out:7*2*n_out].zero_().add_(highway_bias)
+            if self.use_highway:
+                self.bias_in.data[6*2*n_out:7*2*n_out].zero_().add_(highway_bias)
             self.bias_in.data[5*2*n_out:6*2*n_out].zero_().add_(selfloop_bias)
         else:
-            self.bias_in.data[6*n_out:7*n_out].zero_().add_(highway_bias)
+            if self.use_highway:
+                self.bias_in.data[6*n_out:7*n_out].zero_().add_(highway_bias)
             self.bias_in.data[5*n_out:6*n_out].zero_().add_(selfloop_bias)
 
         self.scale_x = 1
@@ -174,8 +190,8 @@ class SOPACell(nn.Module):
             for i in range(3, self.k):
                 w_in[:, :, :, i].mul_(0.1)
 
-        if self.k == 8:
-            w_in[:, :, :, 7].mul_(self.scale_x)
+        if self.use_highway and self.n_in != self.n_out:
+            w_in[:, :, :, -1].mul_(self.scale_x)
         # re-parameterize when weight normalization is enabled
         if self.weight_norm:
             self.init_weight_norm()
@@ -198,11 +214,11 @@ class SOPACell(nn.Module):
         self.highway_bias = args.highway_bias
         self.selfloop_bias = args.selfloop_bias
         self.init_weight()
-        #n_out = self.n_out
-        #if self.bidirectional:
-        #    self.bias.data[n_out*2:].zero_().add_(bias_val)
-        #else:
-        #    self.bias.data[n_out:].zero_().add_(bias_val)
+        # n_out = self.n_out
+        # if self.bidirectional:
+        #     self.bias.data[n_out*2:].zero_().add_(bias_val)
+        # else:
+        #     self.bias.data[n_out:].zero_().add_(bias_val)
 
 
     def calc_activation(self, x):
@@ -219,7 +235,7 @@ class SOPACell(nn.Module):
         assert input.dim() == 2 or input.dim() == 3
         n_in, n_out = self.n_in, self.n_out
         batch = input.size(-2)
-        bidir = 2 if self.bidirectional else 1
+        bidir = self.bidir
         length = input.size(0)
         if init is None:
             c1_init = Variable(input.data.new(
@@ -238,16 +254,44 @@ class SOPACell(nn.Module):
         else:
             x = input
 
-        x_2d = x if x.dim() == 2 else x.contiguous().view(-1, n_in)
+
+        if self.window_size == 1:
+            x_2d = x if x.dim() == 2 else x.contiguous().view(-1, n_in)
+        elif self.window_size == 2:
+            Xm1 = []
+            Xm1.append(x[:1, :, :] * 0)
+            if len(x) > 1:
+                Xm1.append(x[:-1, :, :])
+            Xm1 = torch.cat(Xm1, 0)
+            # Convert two (seq_len, batch_size, hidden) tensors to (seq_len, batch_size, 2 * hidden)
+            source = torch.cat([x, Xm1], 2)
+            x_2d = source if source.dim() == 2 else source.contiguous().view(-1, n_in * 2)
+        else:
+            assert False    # yes they only use up to 2.
+
         weight_in = self.weight_in if not self.weight_norm else self.apply_weight_norm()
         u_ = x_2d.mm(weight_in)
-        # reset is not passed to compute function'
         u_ = u_.view(length, batch, bidir, n_out, self.k)
 
         # some of the bias params here are never used. but i'm keeping them now
         # in case we need to bring them back in the future
-        _, _, _, forget_bias1, forget_bias2, \
-            selfloop_bias, reset_bias = self.bias_in.view(7, bidir, n_out)
+
+        bias = self.bias_in.view(self.n_bias, bidir, n_out)
+        # basic: in1, in2, in3, f1, f2, s1
+        # optional: reset, output, highway affine.
+        # we do not use bias in highway affine
+
+        _, _, _, forget_bias1, forget_bias2, selfloop_bias = bias[:6, ...]
+        if self.use_highway:
+            reset_bias = bias[6, ...]
+            reset = (u_[..., 6] + reset_bias).sigmoid()
+            if self.use_output_gate:
+                output_bias = bias[7, ...]
+                output = (u_[..., 7] + output_bias).sigmoid()
+        elif self.use_output_gate:
+            output_bias = bias[6, ...]
+            output = (u_[..., 6] + output_bias).sigmoid()
+
         u = Variable(u_.data.new(length, batch, bidir, n_out, 6))
 
         u[..., 0] = u_[..., 0]  # input 1
@@ -257,15 +301,16 @@ class SOPACell(nn.Module):
         u[..., 3] = (u_[..., 3] + forget_bias1).sigmoid()   # forget 1
         u[..., 4] = (u_[..., 4] + forget_bias2).sigmoid()   # forget 2
         u[..., 5] = (u_[..., 5] + selfloop_bias).sigmoid()  # selfloop
+
         # u.register_hook(print)
         # non_cuda_compatability: On a cuda machine
         if input.is_cuda:
-            SOPA_Compute = SOPA_Compute_GPU(n_out, 7, self.bidirectional)
+            SOPA_Compute = SOPA_Compute_GPU(n_out, 6, self.bidirectional)
         else:
-            SOPA_Compute = SOPA_Compute_CPU(n_out, 7, self.bidirectional)
+            SOPA_Compute = SOPA_Compute_CPU(n_out, 6, self.bidirectional)
 
         # non_cuda_compatability: On a non-cuda machine
-        # SOPA_Compute = SOPA_Compute_CPU(n_out, 7, self.bidirectional)
+        # SOPA_Compute = SOPA_Compute_CPU(n_out, 6, self.bidirectional)
 
         c1s, c2s, c1_final, c2_final, d_final = SOPA_Compute(u, c1_init, c2_init, d_init)
 
@@ -275,20 +320,23 @@ class SOPACell(nn.Module):
         mask_c2 = self.get_dropout_mask_((1, batch, bidir, n_out), self.dropout) \
             if self.training and self.dropout > 0. else None
         mask_c2 = 1. if mask_c2 is None else mask_c2.expand_as(c2s)
-        cs = self.bias_out + self.coef * (c1s * mask_c1).view(-1, n_out).mm(self.weight_out1) \
-                + (1. - self.coef) * (c2s * mask_c2).view(-1, n_out).mm(self.weight_out2)
+        cs = self.bias_out + self.coef * (c1s * mask_c1).view(-1, bidir*n_out).mm(self.weight_out1) \
+                + (1. - self.coef) * (c2s * mask_c2).view(-1, bidir*n_out).mm(self.weight_out2)
+
         
-        gcs = self.calc_activation(cs).view(length, batch, bidir, n_out)
+        if self.use_output_gate:
+            gcs = self.calc_activation(output*cs.view(length, batch, bidir, n_out))
+        else:
+            gcs = self.calc_activation(cs).view(length, batch, bidir, n_out)
         # mask_h = self.get_dropout_mask_((1, batch, bidir, n_out), self.dropout) \
         #         if self.training and self.dropout > 0. else None
         # mask_h = 1. if mask_h is None else mask_h.expand_as(gcs)
         if self.use_highway:
-            reset = (u_[..., 6] + reset_bias).sigmoid()
-            if self.k == 7:
+            if self.n_in == self.n_out:
                 x_prime = input.view(length, batch, bidir, n_out)
                 x_prime = x_prime * self.scale_x if self.scale_x != 1 else x_prime
             else:
-                x_prime = u_[..., 7]
+                x_prime = u_[..., -1]
             # h = (gcs*mask_h-x_prime)*reset+x_prime
             h = (gcs - x_prime) * reset + x_prime
         else:
@@ -362,7 +410,9 @@ class SOPA(nn.Module):
                  highway_bias=0,
                  selfloop_bias=0,
                  coef=.5,
-                 use_highway=False):
+                 use_highway=False,
+                 use_output_gate=False,
+                 window_size=1):
         super(SOPA, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -399,7 +449,9 @@ class SOPA(nn.Module):
                 selfloop_bias=selfloop_bias,
                 index=i+1,
                 coef=coef,
-                use_highway=use_highway
+                use_highway=use_highway,
+                use_output_gate=use_output_gate,
+                window_size=window_size
             )
             self.rnn_lst.append(l)
             if layer_norm:

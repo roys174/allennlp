@@ -47,7 +47,7 @@ class SOPA_Compute_GPU(Function):
 
     def forward(self, u, c1_init=None, c2_init=None, d_init=None):
         bidir = 2 if self.bidirectional else 1
-        assert u.size(-1) == self.k - 1
+        assert u.size(-1) == self.k
         length, batch = u.size(0), u.size(1)
         dim = self.d_out
         ncols = batch*dim*bidir
@@ -75,7 +75,7 @@ class SOPA_Compute_GPU(Function):
             np.int32(length),
             np.int32(batch),
             np.int32(dim),
-            np.int32(self.k-1),
+            np.int32(self.k),
             c1s.data_ptr(),
             c2s.data_ptr(),
             d.data_ptr()],
@@ -137,7 +137,7 @@ class SOPA_Compute_GPU(Function):
             np.int32(length),
             np.int32(batch),
             np.int32(dim),
-            np.int32(self.k-1),
+            np.int32(self.k),
             grad_u.data_ptr(),
             grad_init_c1.data_ptr(),
             grad_init_c2.data_ptr(),

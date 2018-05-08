@@ -64,8 +64,8 @@ class SRUCell(nn.Module):
     def __init__(self,
                  n_in,
                  n_out,
-                 dropout=0,
-                 rnn_dropout=0,
+                 dropout=0.2,
+                 rnn_dropout=0.2,
                  bidirectional=False,
                  use_tanh=1,
                  use_relu=0,
@@ -88,7 +88,7 @@ class SRUCell(nn.Module):
         self.highway_bias = highway_bias
         self.index = index
         self.activation_type = 0
-        self.recurrent_tanh = recurrent_tanh
+        self.use_recurrent_tanh = recurrent_tanh
         if use_tanh:
             self.activation_type = 1
         elif use_relu:
@@ -202,7 +202,7 @@ class SRUCell(nn.Module):
 
         u[..., 0] = u_[..., 0]
         u[..., 1] = (u_[..., 1] + forget_bias).sigmoid()
-        rec_act = 1 if self.recurrent_tanh else 0
+        rec_act = 1 if self.use_recurrent_tanh else 0
         if input.is_cuda:
             SRU_Compute = SRU_Compute_GPU(n_out, 3, self.bidirectional, activation_type=rec_act)
         else:
@@ -235,8 +235,8 @@ class SRUCell(nn.Module):
 class SRU(nn.Module):
     def __init__(self, input_size, hidden_size,
                  num_layers=2,
-                 dropout=0,
-                 rnn_dropout=0,
+                 dropout=0.2,
+                 rnn_dropout=0.2,
                  bidirectional=False,
                  use_tanh=1,
                  use_relu=0,

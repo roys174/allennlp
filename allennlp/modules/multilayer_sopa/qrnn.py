@@ -15,14 +15,13 @@ class QRNNCell(nn.Module):
     def __init__(self,
                  n_in,
                  n_out,
-                 window_size=1,
-                 dropout=0,
-                 rnn_dropout=0,
+                 window_size=2,
+                 rnn_dropout=0.25,
                  bidirectional=False,
                  use_tanh=1,
                  use_relu=0,
                  use_selu=0,
-                 use_output_gate=False,
+                 use_output_gate=True,
                  weight_norm=False,
                  layer_norm=False,
                  index=-1):
@@ -30,7 +29,6 @@ class QRNNCell(nn.Module):
         self.n_in = n_in
         self.n_out = n_out
         self.rnn_dropout = rnn_dropout
-        self.dropout = dropout
         self.bidirectional = bidirectional
         self.weight_norm = weight_norm
         self.layer_norm = layer_norm
@@ -45,7 +43,6 @@ class QRNNCell(nn.Module):
         self.window_size = window_size
         self.use_output_gate = use_output_gate
 
-        out_size = n_out*2 if bidirectional else n_out
         k = 3 if use_output_gate else 2
 
         self.k = k
@@ -69,8 +66,8 @@ class QRNNCell(nn.Module):
 
         # re-scale weights in case there's dropout and / or layer normalization
         w = self.weight.data.view(self.window_size*self.n_in, -1, self.n_out, self.k)
-        if self.dropout>0:
-            w[:,:,:,0].mul_((1-self.dropout)**0.5)
+        # if self.dropout>0:
+        #     w[:,:,:,0].mul_((1-self.dropout)**0.5)
         if self.rnn_dropout>0:
             w.mul_((1-self.rnn_dropout)**0.5)
         if self.layer_norm:
@@ -98,11 +95,11 @@ class QRNNCell(nn.Module):
         )
         self.highway_bias = args.highway_bias
         self.init_weight()
-        #n_out = self.n_out
-        #if self.bidirectional:
-        #    self.bias.data[n_out*2:].zero_().add_(bias_val)
-        #else:
-        #    self.bias.data[n_out:].zero_().add_(bias_val)
+        # n_out = self.n_out
+        # if self.bidirectional:
+        #     self.bias.data[n_out*2:].zero_().add_(bias_val)
+        # else:
+        #     self.bias.data[n_out:].zero_().add_(bias_val)
 
     def calc_activation(self, x):
         if self.activation_type == 0:
@@ -149,7 +146,6 @@ class QRNNCell(nn.Module):
         else:
             assert False    # yes they only use up to 2.
 
-
         if self.use_output_gate:
             input_bias, forget_bias, output_bias = self.bias.view(self.k, bidir, self.n_out)
         else :
@@ -164,14 +160,14 @@ class QRNNCell(nn.Module):
             QRNN_Compute = SRU_Compute_CPU(n_out, 3, self.bidirectional)
 
         cs, c_final = QRNN_Compute(u, c0)
-        gcs = self.calc_activation(cs)
-
         if self.use_output_gate:
             output = (u_[..., 2] + output_bias).sigmoid()
-            h = output * gcs
+            gcs = self.calc_activation(output*cs)
         else:
-            h = gcs
-        return h.view(length, batch, -1), c_final
+            gcs = self.calc_activation(cs)
+
+        # TODO: implement highway here.
+        return gcs.view(length, batch, -1), c_final
 
     def get_dropout_mask_(self, size, p):
         w = self.weight.data
@@ -182,21 +178,19 @@ class QRNNCell(nn.Module):
 class QRNN(nn.Module):
     def __init__(self, input_size, hidden_size,
                  num_layers=2,
-                 window_size=1,
-                 dropout=0,
-                 rnn_dropout=0,
+                 window_size=2,
+                 rnn_dropout=0.2,
                  bidirectional=False,
                  use_tanh=1,
                  use_relu=0,
                  use_selu=0,
-                 use_output_gate=False,
+                 use_output_gate=True,
                  weight_norm=False,
                  layer_norm=False):
         super(QRNN, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.dropout = dropout
         self.rnn_dropout = rnn_dropout
         self.rnn_lst = nn.ModuleList()
         self.ln_lst = nn.ModuleList()
@@ -214,7 +208,6 @@ class QRNN(nn.Module):
                 n_in = self.input_size if i == 0 else self.out_size,
                 n_out = self.hidden_size,
                 window_size=window_size,
-                dropout = dropout if i+1 != num_layers else 0,
                 rnn_dropout = rnn_dropout,
                 bidirectional = bidirectional,
                 use_tanh = use_tanh,
