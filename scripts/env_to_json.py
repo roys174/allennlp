@@ -59,26 +59,34 @@ def main(args):
 
 def build_encoder(v, old_encoder):
     hidden_size = int(v["HIDDEN_SIZE"]) if "HIDDEN_SIZE" in v else old_encoder["hidden_size"]
-    d = {"type": v["MODEL"],
+    model = v["MODEL"]
+
+    d = {"type": model,
              "hidden_size": hidden_size,
             "num_layers": int(v["DEPTH"]),
-            "dropout": 0.5,
             "bidirectional": True,
             "input_size": old_encoder["input_size"]
          }
-    if v["MODEL"] != "lstm":
+
+    if model != 'qrnn':
+        d["dropout"] = float(v["DROPOUT"])
+
+    if model != "lstm":
         d["use_tanh"] = 1
         d["use_relu"] = 0
         d["use_selu"] = 0
         d["rnn_dropout"] = float(v["RNN_DROPOUT"])
 
-    if v["MODEL"] == 'sru':
+    if model == 'sru' or model == "sopa":
         d["use_highway"] = bool_str(v["USE_HIGHWAY"])
-        d["recurrent_tanh"] = bool_str(v["RECURRENT_TANH"])
-    elif v["MODEL"] == "sopa":
-        d["use_highway"] = bool_str(v["USE_HIGHWAY"])
-        d["coef"] = float(v["COEF"])
+        if model == 'sru':
+            d["recurrent_tanh"] = bool_str(v["RECURRENT_TANH"])
+        elif model == "sopa":
+            d["coef"] = float(v["COEF"])
 
+    if model == 'qrnn' or model == "sopa":
+        d["use_output_gate"] = bool_str(v["USE_OUTPUT_GATE"])
+        d["window_size"] = int(v["WINDOW_SIZE"])
 
     return d
 
