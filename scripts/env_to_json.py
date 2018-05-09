@@ -27,6 +27,7 @@ def main(args):
         base["model"][encoder] = build_encoder(v, base["model"][encoder])
 
     if "trainer" in base:
+        base["trainer"]["num_epochs"] = int(v["N_EPOCHS"])
         if "optimizer" in base["trainer"]:
             base["trainer"]["optimizer"]["lr"] = float(v["LEARNING_RATE"])
         else:
