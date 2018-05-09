@@ -10,7 +10,7 @@ for f in ~/code/allennlp_ner/allennlp/allennlp/modules/multilayer_sopa/{sopa,sru
     \        prevx = pack_padded_sequence(prevx, lengths, batch_first=True)\
     ' a
 
-    n=$(grep -n 'def forward(self, input, init=None, return_hidden=True):' $f | awk '{print $1}' | tr -d ':')
+    n=$(grep -nE 'def forward\(self, input, init(_hidden)?=None, return_hidden=True\):' $f | awk '{print $1}' | tr -d ':')
     let n++
     sed -i '' ${n}'i\
     \        input, lengths = pad_packed_sequence(input, batch_first=True)

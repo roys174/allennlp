@@ -231,13 +231,13 @@ class SOPACell(nn.Module):
         else:
             assert False, 'Activation type must be 0, 1, or 2, not {}'.format(self.activation_type)
 
-    def forward(self, input, init=None):
+    def forward(self, input, init_hidden=None):
         assert input.dim() == 2 or input.dim() == 3
         n_in, n_out = self.n_in, self.n_out
         batch = input.size(-2)
         bidir = self.bidir
         length = input.size(0)
-        if init is None:
+        if init_hidden is None:
             c1_init = Variable(input.data.new(
                 batch, n_out if not self.bidirectional else n_out*2).zero_())
             c2_init = Variable(input.data.new(
@@ -245,15 +245,14 @@ class SOPACell(nn.Module):
             d_init = Variable(input.data.new(
                 batch, n_out if not self.bidirectional else n_out*2).zero_())
         else:
-            assert (len(init) == 3)
-            c1_init, c2_init, d_init = init
+            assert (len(init_hidden) == 3)
+            c1_init, c2_init, d_init = init_hidden
 
         if self.training and (self.rnn_dropout>0):
             mask = self.get_dropout_mask_((1, batch, n_in), self.rnn_dropout)
             x = input * mask.expand_as(input)
         else:
             x = input
-
 
         if self.window_size == 1:
             x_2d = x if x.dim() == 2 else x.contiguous().view(-1, n_in)
@@ -322,7 +321,6 @@ class SOPACell(nn.Module):
         mask_c2 = 1. if mask_c2 is None else mask_c2.expand_as(c2s)
         cs = self.bias_out + self.coef * (c1s * mask_c1).view(-1, bidir*n_out).mm(self.weight_out1) \
                 + (1. - self.coef) * (c2s * mask_c2).view(-1, bidir*n_out).mm(self.weight_out2)
-
         
         if self.use_output_gate:
             gcs = self.calc_activation(output*cs.view(length, batch, bidir, n_out))
@@ -461,31 +459,32 @@ class SOPA(nn.Module):
         for l in self.rnn_lst:
             l.set_bias(args)
 
-    def forward(self, input, init=None, return_hidden=True):
+    def forward(self, input, init_hidden=None, return_hidden=True):
         input, lengths = pad_packed_sequence(input, batch_first=True)
         assert input.dim() == 3 # (len, batch, n_in)
         dir_ = 2 if self.bidirectional else 1
         batch = input.size(1)
-        if init is None:
-            init = [(
+        if init_hidden is None:
+            init_hidden = [(
                 Variable(input.data.new(batch, self.hidden_size * dir_).zero_()),
                 Variable(input.data.new(batch, self.hidden_size * dir_).zero_()),
                 Variable(input.data.new(batch, self.hidden_size * dir_).zero_()),
-            ) for i in range(self.num_layers) ]
+            ) for i in range(self.num_layers)]
+            # assert False, "Please get the initial hidden states using init_hidden method."
         else:
-            for c in init:
+            for c in init_hidden:
                 assert c.dim() == 3
-            init = [(c1.squeeze(0), c2.squeeze(0), d.squeeze(0))
-                    for c1,c2,d in zip(
-                        init[0].chunk(self.num_layers, 0),
-                        init[1].chunk(self.num_layers, 0),
-                        init[2].chunk(self.num_layers, 0)
+            init_hidden = [(c1.squeeze(0), c2.squeeze(0), d.squeeze(0))
+                           for c1,c2,d in zip(
+                        init_hidden[0].chunk(self.num_layers, 0),
+                        init_hidden[1].chunk(self.num_layers, 0),
+                        init_hidden[2].chunk(self.num_layers, 0)
                     )]
 
         prevx = input
         lstc1, lstc2, lstd = [], [], []
         for i, rnn in enumerate(self.rnn_lst):
-            h, c1, c2, d = rnn(prevx, init[i])
+            h, c1, c2, d = rnn(prevx, init_hidden[i])
             prevx = self.ln_lst[i](h) if self.use_layer_norm else h
             lstc1.append(c1)
             lstc2.append(c2)
